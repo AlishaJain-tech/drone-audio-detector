@@ -81,114 +81,59 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ─── Google Drive file IDs ────────────────────────────────────────────────────
-# Folder: https://drive.google.com/drive/folders/17iZkBjDfyy-l6Co0qZ1Afrt-Dwn2rC69
-DRIVE_FILES = {
-    'scaler.pkl':          None,
-    'label_encoder.pkl':   None,
-    'random_forest.pkl':   None,
-    'mlp.pkl':             None,
+# ─── Google Drive File IDs ────────────────────────────────────────────────────
+FILE_IDS = {
+    'scaler.pkl':        '1faY2oxqqMaidiLc457oXX4a2hSNGIqY6',
+    'label_encoder.pkl': '1qeU8d14PGK3hHeGo6q0XDzJlfGsxoL_Q',
+    'random_forest.pkl': '1YHuxArWBovqv7qegwLgtQvRWbpP-MT77',
+    'mlp.pkl':           '1hmZyg2Ro2dblb5Akwu5pIlYhzq1Auny7',
 }
-FOLDER_ID = "17iZkBjDfyy-l6Co0qZ1Afrt-Dwn2rC69"
+
+# ─── Download from Drive ──────────────────────────────────────────────────────
+def download_from_drive(file_id):
+    import requests
+    session = requests.Session()
+    url     = f"https://drive.google.com/uc?export=download&id={file_id}"
+    resp    = session.get(url, stream=True)
+
+    # Large file confirmation token
+    token = None
+    for key, val in resp.cookies.items():
+        if key.startswith('download_warning'):
+            token = val
+            break
+
+    if token:
+        url  = f"https://drive.google.com/uc?export=download&id={file_id}&confirm={token}"
+        resp = session.get(url, stream=True)
+
+    return resp.content
 
 @st.cache_resource(show_spinner=False)
-def load_models_from_drive():
-    import requests
-    import pickle
-
-    def download_file(filename):
-        # Google Drive folder listing API
-        api_url = (
-            f"https://www.googleapis.com/drive/v3/files"
-            f"?q='{FOLDER_ID}'+in+parents+and+name='{filename}'"
-            f"&key=AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBWY"
-            f"&fields=files(id,name)"
-        )
-        # Direct download using file ID from known mapping
-        download_url = f"https://drive.google.com/uc?export=download&id="
-        return download_url
-
-    def gdrive_download(file_id):
-        """Download a file from Google Drive by ID."""
-        url = f"https://drive.google.com/uc?export=download&id={file_id}"
-        session = requests.Session()
-        response = session.get(url, stream=True)
-        # Handle large file confirmation
-        for key, value in response.cookies.items():
-            if key.startswith('download_warning'):
-                url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm={value}"
-                response = session.get(url, stream=True)
-                break
-        return response.content
-
-    def list_folder_files():
-        """List all files in the shared folder."""
-        url = (
-            f"https://drive.google.com/drive/folders/{FOLDER_ID}"
-        )
-        # Use public folder API
-        api = (
-            f"https://www.googleapis.com/drive/v3/files"
-            f"?q=%27{FOLDER_ID}%27+in+parents"
-            f"&fields=files(id,name)"
-            f"&supportsAllDrives=true"
-        )
-        # Fallback: use gdown
-        return None
-
-    # Use gdown to download files from folder
-    import subprocess
-    import sys
+def load_models():
     import tempfile
-
-    # Install gdown if not present
-    try:
-        import gdown
-    except ImportError:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "gdown", "-q"])
-        import gdown
-
     tmpdir = tempfile.mkdtemp()
 
+    files_needed = ['scaler.pkl', 'label_encoder.pkl', 'random_forest.pkl', 'mlp.pkl']
+
+    for fname in files_needed:
+        fid  = FILE_IDS[fname]
+        path = os.path.join(tmpdir, fname)
+        try:
+            data = download_from_drive(fid)
+            with open(path, 'wb') as f:
+                f.write(data)
+        except Exception as e:
+            return None, None, None, None, f"{fname} download failed: {e}"
+
     try:
-        # Download entire folder
-        gdown.download_folder(
-            id=FOLDER_ID,
-            output=tmpdir,
-            quiet=True,
-            use_cookies=False
-        )
+        scaler = joblib.load(os.path.join(tmpdir, 'scaler.pkl'))
+        le     = joblib.load(os.path.join(tmpdir, 'label_encoder.pkl'))
+        rf     = joblib.load(os.path.join(tmpdir, 'random_forest.pkl'))
+        mlp    = joblib.load(os.path.join(tmpdir, 'mlp.pkl'))
+        return scaler, le, rf, mlp, None
     except Exception as e:
-        return None, None, None, None, str(e)
-
-    # Load models
-    scaler, le, rf, mlp = None, None, None, None
-
-    try:
-        scaler_path = os.path.join(tmpdir, 'scaler.pkl')
-        le_path     = os.path.join(tmpdir, 'label_encoder.pkl')
-        if os.path.exists(scaler_path): scaler = joblib.load(scaler_path)
-        if os.path.exists(le_path):     le     = joblib.load(le_path)
-    except Exception as e:
-        return None, None, None, None, f"Scaler/LE load failed: {e}"
-
-    try:
-        rf_path = os.path.join(tmpdir, 'random_forest.pkl')
-        if os.path.exists(rf_path): rf = joblib.load(rf_path)
-    except: pass
-
-    try:
-        mlp_path = os.path.join(tmpdir, 'mlp.pkl')
-        if os.path.exists(mlp_path): mlp = joblib.load(mlp_path)
-    except: pass
-
-    if scaler is None or le is None:
-        return None, None, None, None, "scaler.pkl ya label_encoder.pkl nahi mila Drive mein"
-
-    if rf is None and mlp is None:
-        return None, None, None, None, "Koi model file nahi mili Drive mein"
-
-    return scaler, le, rf, mlp, None
+        return None, None, None, None, f"Model load failed: {e}"
 
 # ─── Feature extraction ───────────────────────────────────────────────────────
 SR       = 22050
@@ -237,9 +182,9 @@ st.markdown('<p class="subtitle">Upload an audio file — instantly know if a dr
             unsafe_allow_html=True)
 st.markdown("---")
 
-# ─── Load models ──────────────────────────────────────────────────────────────
-with st.spinner("🔄 Models load ho rahe hain... (pehli baar thoda time lagega)"):
-    scaler, le, rf, mlp, error = load_models_from_drive()
+# ─── Load models silently ─────────────────────────────────────────────────────
+with st.spinner("🔄 Loading models... (pehli baar 30-60 sec lagenge)"):
+    scaler, le, rf, mlp, error = load_models()
 
 if error or scaler is None:
     st.error(f"❌ Models load nahi hue: {error}")
