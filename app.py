@@ -89,42 +89,32 @@ FILE_IDS = {
     'mlp.pkl':           '1hmZyg2Ro2dblb5Akwu5pIlYhzq1Auny7',
 }
 
-# ─── Download from Drive ──────────────────────────────────────────────────────
-def download_from_drive(file_id):
-    import requests
-    session = requests.Session()
-    url     = f"https://drive.google.com/uc?export=download&id={file_id}"
-    resp    = session.get(url, stream=True)
-
-    # Large file confirmation token
-    token = None
-    for key, val in resp.cookies.items():
-        if key.startswith('download_warning'):
-            token = val
-            break
-
-    if token:
-        url  = f"https://drive.google.com/uc?export=download&id={file_id}&confirm={token}"
-        resp = session.get(url, stream=True)
-
-    return resp.content
-
+# ─── Download using gdown ─────────────────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
 def load_models():
     import tempfile
+    import subprocess
+    import sys
+
+    # Install gdown
+    try:
+        import gdown
+    except ImportError:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "gdown", "-q"])
+        import gdown
+
     tmpdir = tempfile.mkdtemp()
 
-    files_needed = ['scaler.pkl', 'label_encoder.pkl', 'random_forest.pkl', 'mlp.pkl']
-
-    for fname in files_needed:
-        fid  = FILE_IDS[fname]
-        path = os.path.join(tmpdir, fname)
+    for fname, fid in FILE_IDS.items():
+        out_path = os.path.join(tmpdir, fname)
         try:
-            data = download_from_drive(fid)
-            with open(path, 'wb') as f:
-                f.write(data)
+            url = f"https://drive.google.com/uc?id={fid}"
+            gdown.download(url, out_path, quiet=True, fuzzy=True)
         except Exception as e:
             return None, None, None, None, f"{fname} download failed: {e}"
+
+        if not os.path.exists(out_path) or os.path.getsize(out_path) < 100:
+            return None, None, None, None, f"{fname} download failed — file empty or missing"
 
     try:
         scaler = joblib.load(os.path.join(tmpdir, 'scaler.pkl'))
@@ -182,7 +172,7 @@ st.markdown('<p class="subtitle">Upload an audio file — instantly know if a dr
             unsafe_allow_html=True)
 st.markdown("---")
 
-# ─── Load models silently ─────────────────────────────────────────────────────
+# ─── Load models ──────────────────────────────────────────────────────────────
 with st.spinner("🔄 Loading models... (pehli baar 30-60 sec lagenge)"):
     scaler, le, rf, mlp, error = load_models()
 
