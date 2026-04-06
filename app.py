@@ -6,14 +6,12 @@ import io
 import warnings
 warnings.filterwarnings('ignore')
 
-# ─── Page Config ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Drone Audio Detector",
     page_icon="🚁",
     layout="centered"
 )
 
-# ─── CSS ──────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     .main-title {
@@ -22,13 +20,12 @@ st.markdown("""
         font-weight: 900;
         color: #1976d2;
         margin-bottom: 4px;
-        letter-spacing: 1px;
     }
     .subtitle {
         text-align: center;
         color: #7f8c8d;
         font-size: 1rem;
-        margin-bottom: 28px;
+        margin-bottom: 20px;
     }
     .drone-box {
         background: linear-gradient(135deg, #0d47a1, #1565c0);
@@ -40,7 +37,6 @@ st.markdown("""
         font-weight: 900;
         margin: 24px 0 16px 0;
         box-shadow: 0 6px 28px rgba(21,101,192,0.45);
-        letter-spacing: 1px;
     }
     .unknown-box {
         background: linear-gradient(135deg, #1b5e20, #2e7d32);
@@ -52,7 +48,6 @@ st.markdown("""
         font-weight: 900;
         margin: 24px 0 16px 0;
         box-shadow: 0 6px 28px rgba(46,125,50,0.45);
-        letter-spacing: 1px;
     }
     .bar-label {
         font-weight: 700;
@@ -66,14 +61,13 @@ st.markdown("""
     .stButton > button {
         background: linear-gradient(135deg, #1565c0, #1976d2);
         color: white;
-        font-size: 1.15rem;
+        font-size: 1.1rem;
         font-weight: 800;
         border: none;
         border-radius: 12px;
-        padding: 15px;
+        padding: 14px;
         width: 100%;
         margin-top: 8px;
-        letter-spacing: 0.5px;
     }
     .stButton > button:hover { opacity: 0.87; }
     .upload-hint {
@@ -87,7 +81,116 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ─── Audio feature extraction (exact same as notebook) ────────────────────────
+# ─── Google Drive file IDs ────────────────────────────────────────────────────
+# Folder: https://drive.google.com/drive/folders/17iZkBjDfyy-l6Co0qZ1Afrt-Dwn2rC69
+DRIVE_FILES = {
+    'scaler.pkl':          None,
+    'label_encoder.pkl':   None,
+    'random_forest.pkl':   None,
+    'mlp.pkl':             None,
+}
+FOLDER_ID = "17iZkBjDfyy-l6Co0qZ1Afrt-Dwn2rC69"
+
+@st.cache_resource(show_spinner=False)
+def load_models_from_drive():
+    import requests
+    import pickle
+
+    def download_file(filename):
+        # Google Drive folder listing API
+        api_url = (
+            f"https://www.googleapis.com/drive/v3/files"
+            f"?q='{FOLDER_ID}'+in+parents+and+name='{filename}'"
+            f"&key=AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBWY"
+            f"&fields=files(id,name)"
+        )
+        # Direct download using file ID from known mapping
+        download_url = f"https://drive.google.com/uc?export=download&id="
+        return download_url
+
+    def gdrive_download(file_id):
+        """Download a file from Google Drive by ID."""
+        url = f"https://drive.google.com/uc?export=download&id={file_id}"
+        session = requests.Session()
+        response = session.get(url, stream=True)
+        # Handle large file confirmation
+        for key, value in response.cookies.items():
+            if key.startswith('download_warning'):
+                url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm={value}"
+                response = session.get(url, stream=True)
+                break
+        return response.content
+
+    def list_folder_files():
+        """List all files in the shared folder."""
+        url = (
+            f"https://drive.google.com/drive/folders/{FOLDER_ID}"
+        )
+        # Use public folder API
+        api = (
+            f"https://www.googleapis.com/drive/v3/files"
+            f"?q=%27{FOLDER_ID}%27+in+parents"
+            f"&fields=files(id,name)"
+            f"&supportsAllDrives=true"
+        )
+        # Fallback: use gdown
+        return None
+
+    # Use gdown to download files from folder
+    import subprocess
+    import sys
+    import tempfile
+
+    # Install gdown if not present
+    try:
+        import gdown
+    except ImportError:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "gdown", "-q"])
+        import gdown
+
+    tmpdir = tempfile.mkdtemp()
+
+    try:
+        # Download entire folder
+        gdown.download_folder(
+            id=FOLDER_ID,
+            output=tmpdir,
+            quiet=True,
+            use_cookies=False
+        )
+    except Exception as e:
+        return None, None, None, None, str(e)
+
+    # Load models
+    scaler, le, rf, mlp = None, None, None, None
+
+    try:
+        scaler_path = os.path.join(tmpdir, 'scaler.pkl')
+        le_path     = os.path.join(tmpdir, 'label_encoder.pkl')
+        if os.path.exists(scaler_path): scaler = joblib.load(scaler_path)
+        if os.path.exists(le_path):     le     = joblib.load(le_path)
+    except Exception as e:
+        return None, None, None, None, f"Scaler/LE load failed: {e}"
+
+    try:
+        rf_path = os.path.join(tmpdir, 'random_forest.pkl')
+        if os.path.exists(rf_path): rf = joblib.load(rf_path)
+    except: pass
+
+    try:
+        mlp_path = os.path.join(tmpdir, 'mlp.pkl')
+        if os.path.exists(mlp_path): mlp = joblib.load(mlp_path)
+    except: pass
+
+    if scaler is None or le is None:
+        return None, None, None, None, "scaler.pkl ya label_encoder.pkl nahi mila Drive mein"
+
+    if rf is None and mlp is None:
+        return None, None, None, None, "Koi model file nahi mili Drive mein"
+
+    return scaler, le, rf, mlp, None
+
+# ─── Feature extraction ───────────────────────────────────────────────────────
 SR       = 22050
 DURATION = 3
 N_MFCC   = 40
@@ -102,34 +205,21 @@ def extract_features(audio_bytes):
             y = np.pad(y, (0, target_len - len(y)), mode='constant')
         else:
             y = y[:target_len]
-
         feat = []
-
-        # 1. MFCCs mean + std  →  80 features
         mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=N_MFCC)
         feat.extend(np.mean(mfcc, axis=1))
         feat.extend(np.std(mfcc,  axis=1))
-
-        # 2. Delta MFCCs mean  →  40 features
         delta = librosa.feature.delta(mfcc)
         feat.extend(np.mean(delta, axis=1))
-
-        # 3. Chroma mean + std  →  24 features
         chroma = librosa.feature.chroma_stft(y=y, sr=sr)
         feat.extend(np.mean(chroma, axis=1))
         feat.extend(np.std(chroma,  axis=1))
-
-        # 4. Mel-Spectrogram mean + std  →  2 features
         mel    = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128)
         mel_db = librosa.power_to_db(mel, ref=np.max)
         feat.append(np.mean(mel_db))
         feat.append(np.std(mel_db))
-
-        # 5. Spectral Contrast mean  →  7 features
         sc = librosa.feature.spectral_contrast(y=y, sr=sr)
         feat.extend(np.mean(sc, axis=1))
-
-        # 6. Rolloff, ZCR, RMS  →  6 features
         feat.append(np.mean(librosa.feature.spectral_rolloff(y=y, sr=sr)))
         feat.append(np.std( librosa.feature.spectral_rolloff(y=y, sr=sr)))
         feat.append(np.mean(librosa.feature.zero_crossing_rate(y)))
@@ -137,122 +227,35 @@ def extract_features(audio_bytes):
         rms = librosa.feature.rms(y=y)
         feat.append(np.mean(rms))
         feat.append(np.std(rms))
-
         return np.array(feat, dtype=np.float32)
     except:
         return None
 
-# ─── Load models from folder (automatic — no user upload needed) ───────────────
-@st.cache_resource
-def load_models():
-    """Auto-load pkl files from same folder as app.py"""
-    base = os.path.dirname(os.path.abspath(__file__))
-    errors = []
-
-    # Scaler & Label Encoder — required
-    scaler_path = os.path.join(base, 'scaler.pkl')
-    le_path     = os.path.join(base, 'label_encoder.pkl')
-
-    if not os.path.exists(scaler_path):
-        return None, None, None, None, None, ["❌ scaler.pkl not found in app folder"]
-    if not os.path.exists(le_path):
-        return None, None, None, None, None, ["❌ label_encoder.pkl not found in app folder"]
-
-    scaler = joblib.load(scaler_path)
-    le     = joblib.load(le_path)
-
-    # Models — at least one required
-    rf, mlp, cnn = None, None, None
-
-    rf_path = os.path.join(base, 'random_forest.pkl')
-    if os.path.exists(rf_path):
-        try:    rf = joblib.load(rf_path)
-        except: errors.append("RF load failed")
-
-    mlp_path = os.path.join(base, 'mlp.pkl')
-    if os.path.exists(mlp_path):
-        try:    mlp = joblib.load(mlp_path)
-        except: errors.append("MLP load failed")
-
-    cnn_path = os.path.join(base, 'cnn_model.h5')
-    if os.path.exists(cnn_path):
-        try:
-            import tensorflow as tf
-            cnn = tf.keras.models.load_model(cnn_path)
-        except: errors.append("CNN load failed")
-
-    if rf is None and mlp is None and cnn is None:
-        errors.append("❌ No model file found (random_forest.pkl / mlp.pkl / cnn_model.h5)")
-
-    return scaler, le, rf, mlp, cnn, errors
-
-# ══════════════════════════════════════════════════════════════════════════════
-# HEADER
-# ══════════════════════════════════════════════════════════════════════════════
+# ─── HEADER ───────────────────────────────────────────────────────────────────
 st.markdown('<p class="main-title">🚁 Drone Audio Detector</p>', unsafe_allow_html=True)
 st.markdown('<p class="subtitle">Upload an audio file — instantly know if a drone is present</p>',
             unsafe_allow_html=True)
 st.markdown("---")
 
-# ── Load models silently ───────────────────────────────────────────────────────
-scaler, le, rf, mlp, cnn, load_errors = load_models()
+# ─── Load models ──────────────────────────────────────────────────────────────
+with st.spinner("🔄 Models load ho rahe hain... (pehli baar thoda time lagega)"):
+    scaler, le, rf, mlp, error = load_models_from_drive()
 
-# If models missing — show friendly one-time instruction
-if scaler is None or (rf is None and mlp is None and cnn is None):
-    st.error("⚠️ Model files not found in the app folder!")
-    st.markdown("""
-### 📋 Ek baar karna hai — bas ye files app folder mein rakh do:
-
-| File | Kahan se milegi |
-|------|----------------|
-| `scaler.pkl` | Google Colab se download karo |
-| `label_encoder.pkl` | Google Colab se download karo |
-| `random_forest.pkl` | Google Colab se download karo |
-| `mlp.pkl` | Google Colab se download karo |
-| `cnn_model.h5` | Google Colab se download karo |
-
-**Colab mein ye run karo:**
-```python
-from google.colab import files
-files.download('scaler.pkl')
-files.download('label_encoder.pkl')
-files.download('random_forest.pkl')
-files.download('mlp.pkl')
-files.download('cnn_model.h5')
-```
-
-**Phir saari files is folder mein rakh do:**
-```
-AudioDataSet/
-├── app.py          ← ye file
-├── scaler.pkl      ← yahan
-├── label_encoder.pkl
-├── random_forest.pkl
-├── mlp.pkl
-└── cnn_model.h5
-```
-**Phir terminal mein:** `streamlit run app.py`
-    """)
+if error or scaler is None:
+    st.error(f"❌ Models load nahi hue: {error}")
     st.stop()
 
-# ── Build available model list ─────────────────────────────────────────────────
+# ─── Model selector ───────────────────────────────────────────────────────────
 available = {}
 if rf  is not None: available["🌲 Random Forest"] = "rf"
 if mlp is not None: available["🧠 MLP Neural Net"] = "mlp"
-if cnn is not None: available["🔷 1D CNN"]         = "cnn"
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MAIN UI — Audio Upload + Predict
-# ══════════════════════════════════════════════════════════════════════════════
-
-# Model selector (small, clean)
 model_label  = st.radio("Model:", list(available.keys()),
                          horizontal=True, label_visibility="collapsed")
 model_choice = available[model_label]
-
 st.markdown("---")
 
-# Audio uploader
+# ─── Audio upload ─────────────────────────────────────────────────────────────
 audio_file = st.file_uploader(
     "🎵 Audio file upload karo (.wav / .mp3)",
     type=["wav", "mp3", "ogg", "flac"],
@@ -260,40 +263,31 @@ audio_file = st.file_uploader(
 )
 
 if audio_file:
-    # Play the audio
     st.audio(audio_file, format="audio/wav")
     audio_bytes = audio_file.read()
     st.markdown("---")
 
-    # Predict button
     if st.button("🔍 Detect Drone"):
-        # Feature extraction
         with st.spinner("🔊 Audio analyse ho rahi hai..."):
             features = extract_features(audio_bytes)
 
         if features is None:
-            st.error("❌ Audio file process nahi ho payi. Dobaara try karo.")
+            st.error("❌ Audio process nahi ho payi. Dobaara try karo.")
         else:
             feat_scaled = scaler.transform([features])
 
-            # Predict with chosen model
             with st.spinner("🤖 Detecting..."):
                 if model_choice == "rf":
                     pred  = rf.predict(feat_scaled)[0]
                     proba = rf.predict_proba(feat_scaled)[0]
-                elif model_choice == "mlp":
+                else:
                     pred  = mlp.predict(feat_scaled)[0]
                     proba = mlp.predict_proba(feat_scaled)[0]
-                elif model_choice == "cnn":
-                    fc    = feat_scaled.reshape(1, feat_scaled.shape[1], 1)
-                    proba = cnn.predict(fc, verbose=0)[0]
-                    pred  = int(np.argmax(proba))
 
             label      = le.inverse_transform([pred])[0]
             confidence = proba[pred] * 100
             classes    = le.classes_
 
-            # ── Result ────────────────────────────────────────────────────────
             if "drone" in label.lower():
                 st.markdown(
                     '<div class="drone-box">🚁 DRONE SOUND DETECTED</div>',
@@ -303,14 +297,12 @@ if audio_file:
                     '<div class="unknown-box">✅ NO DRONE DETECTED</div>',
                     unsafe_allow_html=True)
 
-            # ── 3 metrics ─────────────────────────────────────────────────────
             c1, c2, c3 = st.columns(3)
-            c1.metric("Confidence",        f"{confidence:.1f}%")
-            c2.metric(f"P({classes[0]})",  f"{proba[0]*100:.1f}%")
+            c1.metric("Confidence",       f"{confidence:.1f}%")
+            c2.metric(f"P({classes[0]})", f"{proba[0]*100:.1f}%")
             if len(classes) > 1:
                 c3.metric(f"P({classes[1]})", f"{proba[1]*100:.1f}%")
 
-            # ── Probability bars ──────────────────────────────────────────────
             st.markdown("---")
             for i, cls in enumerate(classes):
                 pct   = int(proba[i] * 100)
@@ -325,12 +317,11 @@ if audio_file:
                     f'height:100%;border-radius:8px;"></div></div>',
                     unsafe_allow_html=True)
 
-            # ── Final verdict ─────────────────────────────────────────────────
             st.markdown("---")
             if "drone" in label.lower():
-                st.error(f"⚠️ Drone sound hai is audio mein! ({confidence:.1f}% confident)")
+                st.error(f"⚠️ Drone sound hai! ({confidence:.1f}% confident)")
             else:
-                st.success(f"🟢 Koi drone nahi — background/unknown sound hai. ({confidence:.1f}% confident)")
+                st.success(f"🟢 Koi drone nahi! ({confidence:.1f}% confident)")
 
 else:
     st.markdown("""
@@ -345,8 +336,7 @@ else:
     </div>
     """, unsafe_allow_html=True)
 
-# ─── Footer ───────────────────────────────────────────────────────────────────
 st.markdown("---")
 st.markdown(
-    "<center><sub>🚁 Drone Audio Detector · RF / MLP / CNN · Streamlit</sub></center>",
+    "<center><sub>🚁 Drone Audio Detector · RF / MLP · Streamlit</sub></center>",
     unsafe_allow_html=True)
